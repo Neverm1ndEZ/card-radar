@@ -201,6 +201,16 @@ type LensValue = {
 // These clamp such garbage so it can't dominate the ranking.
 const MAX_REWARD_RATE = 40 // value-back per ₹100; real accelerated rates top out ~33% (Infinia SmartBuy)
 
+// Untrusted scraped rows have rate_kind = NULL ("legacy") — the engine has to GUESS
+// whether the number is a cashback % or points-per-₹100 from the card's currency, and
+// the scrape is unreliable on BOTH the rate and the monthly cap. These rows are the main
+// source of fake "winners": a welcome-bonus or a capped offer parsed as a category rate
+// (e.g. an IRCTC card showing 8% on ALL travel, or basic Diners Rewardz showing 20% on
+// shopping). Real category value-back tops out ~5–6% in India, so we bound the effective
+// ₹/₹100 of EVERY legacy row to this ceiling (any scraped monthly cap still applies on
+// top). Curated rows (explicit rate_kind) are trusted and untouched.
+const MAX_LEGACY_VALUE_BACK = 6 // ₹ per ₹100 (≈ % value-back)
+
 function safeRate(rate: number): number {
   if (!Number.isFinite(rate) || rate < 0) return 0
   return Math.min(rate, MAX_REWARD_RATE)
@@ -236,7 +246,11 @@ function valueUnderLens(card: CardRow, request: RecommendRequest, anchorCpp: num
   for (const [category, monthly] of Object.entries(request.monthly_spends)) {
     if (monthly <= 0) continue
     const rr = resolveRate(rateMap, base, category as SpendCategory)
-    const m = (monthly / 100) * valuePer100(rr.rate, rr.kind)
+    let per100 = valuePer100(rr.rate, rr.kind)
+    // Bound untrusted (legacy/NULL-kind) rows — see MAX_LEGACY_VALUE_BACK. Any scraped
+    // monthly cap (rr.cap) still applies afterward, in the cap-pooling step below.
+    if (rr.kind == null) per100 = Math.min(per100, MAX_LEGACY_VALUE_BACK)
+    const m = (monthly / 100) * per100
     if (m > 0) accs.push({ category, monthly: m, cap: rr.cap, group: rr.capGroup })
   }
 

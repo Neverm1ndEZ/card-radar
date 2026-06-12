@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
     const request = parsed.data
     // Bump ENGINE_VERSION whenever the recommendation logic changes so stale cached
     // results are invalidated immediately (the hash only covers the request, not the code).
-    const ENGINE_VERSION = 'v3'
+    const ENGINE_VERSION = 'v4'
     const cacheKey = `rec:${ENGINE_VERSION}:${hashRequest(request)}`
 
     // Try cache first
