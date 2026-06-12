@@ -1,0 +1,77 @@
+name: CardRadar Catalog Scraper
+
+# Discovers every credit card across the top issuers and auto-updates the live DB.
+# Unlike the benefit scraper (devaluation monitor), this one finds NEW cards and
+# extracts full detail via Gemini, then promotes confident rows into `cards`.
+
+on:
+  schedule:
+    # Weekly on Wednesday at 03:00 IST (21:30 UTC Tuesday) — offset from the
+    # benefit scraper so the two don't contend.
+    - cron: '30 21 * * 2'
+  workflow_dispatch:
+    inputs:
+      bank:
+        description: 'Single issuer key to scrape (e.g. hdfc). Blank = all.'
+        required: false
+        default: ''
+      limit:
+        description: 'Max cards per bank (blank = no limit)'
+        required: false
+        default: ''
+      no_promote:
+        description: 'Dry run — stage only, do not write to cards'
+        type: boolean
+        required: false
+        default: false
+
+jobs:
+  catalog:
+    name: Discover + extract card catalog
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium
+
+      - name: Run catalog scraper
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          ARGS=""
+          if [ -n "${{ github.event.inputs.bank }}" ]; then ARGS="$ARGS --bank=${{ github.event.inputs.bank }}"; fi
+          if [ -n "${{ github.event.inputs.limit }}" ]; then ARGS="$ARGS --limit=${{ github.event.inputs.limit }}"; fi
+          if [ "${{ github.event.inputs.no_promote }}" = "true" ]; then ARGS="$ARGS --no-promote"; fi
+          echo "Running: bun run catalog:scrape $ARGS"
+          bun run catalog:scrape $ARGS
+
+  notify-on-failure:
+    name: Alert on catalog scraper failure
+    needs: catalog
+    runs-on: ubuntu-latest
+    if: failure()
+    steps:
+      - name: Create GitHub issue on failure
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🗂️ Catalog scraper failed — ${new Date().toISOString().slice(0, 10)}`,
+              body: `The CardRadar catalog scraper failed in run [#${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).`,
+              labels: ['scraper', 'automated'],
+            })
